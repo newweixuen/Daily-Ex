@@ -441,6 +441,21 @@
 
     function closeModal() { document.getElementById('addModal').classList.remove('active'); }
 
+    // Refreshes window.expenseData from the server and re-renders using the lightweight
+    // path only — avoids the full section rebuild (and its visible "blink") that a forced
+    // showSection(..., true) would cause, since here we just need the real rowId to replace
+    // a temporary one, not a fresh template.
+    async function reconcileWithServer() {
+        try {
+            const res = await fetch(`${url}?token=${encodeURIComponent(accessToken)}`);
+            const data = await res.json();
+            window.expenseData = data;
+            renderCurrentSectionFromCache();
+        } catch (e) {
+            console.error('Reconciliation fetch failed:', e);
+        }
+    }
+
     async function submitExpense() {
         const date = document.getElementById('date').value;
         const category = document.getElementById('category').value;
@@ -485,7 +500,7 @@
         try {
             await fetch(url, { method: 'POST', body: JSON.stringify(payload) });
             // Reconcile with the server (assigns the real rowId for new entries, clears "pending")
-            showSection(currentSection, true);
+            await reconcileWithServer();
         } catch (e) {
             console.error('Save failed:', e);
             if (tempId) {
@@ -780,12 +795,13 @@
         const track = document.getElementById(prefix + 'SummaryTrack');
         if (!track) return;
         idx = Math.max(0, Math.min(2, idx));
+        const changed = summaryPageState[prefix] !== idx;
         summaryPageState[prefix] = idx;
         track.style.transition = 'transform 0.3s ease';
         track.style.transform = `translateX(-${idx * 100}%)`;
         updateSummaryDots(prefix, idx);
         updateSummaryWrapHeight(prefix);
-        if (prefix === 'ins') applyInsightsChartForPage(idx);
+        if (prefix === 'ins' && changed) applyInsightsChartForPage(idx);
     }
 
     function attachSummarySwipeHandlers(prefix) {
