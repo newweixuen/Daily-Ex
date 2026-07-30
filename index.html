@@ -74,6 +74,16 @@
 </head>
 <body>
 
+<div id="lockScreen" style="position:fixed; inset:0; background:#121417; z-index:999999999; display:flex; align-items:center; justify-content:center;">
+    <div style="width:85%; max-width:320px; text-align:center;">
+        <div style="font-size:2.5rem; margin-bottom:12px;">🔒</div>
+        <h5 class="mb-3" style="color:#e4e6eb;">Enter PIN</h5>
+        <input type="password" id="lockPinInput" class="form-control mb-2 text-center" placeholder="PIN" autocomplete="off" inputmode="text" onkeydown="if(event.key==='Enter'){attemptUnlock();}">
+        <div id="lockErrorMsg" class="text-danger small mb-3" style="display:none;">Incorrect PIN. Try again.</div>
+        <button class="btn btn-primary w-100" onclick="attemptUnlock()">Unlock</button>
+    </div>
+</div>
+
 <header class="fixed-top bg-light border-bottom d-flex align-items-center justify-content-center fw-bold">🧾 Daily Expense</header>
 
 <div class="container mt-2">
@@ -190,6 +200,63 @@
     const url = "https://script.google.com/macros/s/AKfycbz-AV7OUJN5QrRpt9XmZwpBmhJbUbLbYo3j_91TdA4VU7u1JhiZ-ke4QBcctOv1r_hD/exec";
     let editingRowId = null;
     let currentSection = 'expenses';
+
+    // ---------- Access control ----------
+    // Anyone with this page's URL can view its source and find the `url` above, so the
+    // Apps Script backend requires a matching secret token on every request (see Code.gs).
+    // The PIN entered here IS that token — a wrong PIN simply means every request the
+    // backend receives gets rejected, rather than relying on hiding the page itself.
+    const ACCESS_TOKEN_KEY = 'dailyExpenseAccessToken';
+    let accessToken = null;
+
+    async function validateToken(token) {
+        try {
+            const res = await fetch(`${url}?token=${encodeURIComponent(token)}`);
+            const data = await res.json();
+            return Array.isArray(data); // backend returns an array on success, {error:...} otherwise
+        } catch (e) {
+            console.error('Token validation failed:', e);
+            return false;
+        }
+    }
+
+    function showLockScreen() {
+        document.getElementById('lockScreen').style.display = 'flex';
+    }
+
+    function hideLockScreen() {
+        document.getElementById('lockScreen').style.display = 'none';
+    }
+
+    async function attemptUnlock() {
+        const pin = document.getElementById('lockPinInput').value;
+        const errorMsg = document.getElementById('lockErrorMsg');
+        errorMsg.style.display = 'none';
+        if (!pin) return;
+        const valid = await validateToken(pin);
+        if (valid) {
+            accessToken = pin;
+            try { localStorage.setItem(ACCESS_TOKEN_KEY, pin); } catch (e) {}
+            hideLockScreen();
+        } else {
+            errorMsg.style.display = 'block';
+        }
+    }
+
+    async function initAccess() {
+        let cached = null;
+        try { cached = localStorage.getItem(ACCESS_TOKEN_KEY); } catch (e) {}
+        if (cached) {
+            const valid = await validateToken(cached);
+            if (valid) {
+                accessToken = cached;
+                hideLockScreen();
+                return;
+            }
+            try { localStorage.removeItem(ACCESS_TOKEN_KEY); } catch (e) {}
+        }
+        showLockScreen();
+    }
 
     // ---------- Search ----------
     let searchCriteria = { text: '', categories: [], amountMode: 'any', amountMin: null, amountMax: null };
@@ -394,7 +461,8 @@
             category: category,
             description: desc,
             currency: currency,
-            amount: amount
+            amount: amount,
+            token: accessToken
         };
 
         closeModal();
@@ -439,7 +507,7 @@
         renderCurrentSectionFromCache(); // instant re-render from local cache, no network wait
 
         try {
-            await fetch(`${url}?action=delete&rowId=${id}`);
+            await fetch(`${url}?action=delete&rowId=${id}&token=${encodeURIComponent(accessToken)}`);
             refreshDataInBackground();
         } catch (e) {
             console.error('Delete failed:', e);
@@ -963,14 +1031,14 @@
         if (!forceRefresh && window.expenseData) {
             return Promise.resolve({ data: window.expenseData, fromCache: true });
         }
-        return fetch(url).then(res => res.json()).then(data => {
+        return fetch(`${url}?token=${encodeURIComponent(accessToken)}`).then(res => res.json()).then(data => {
             window.expenseData = data;
             return { data, fromCache: false };
         });
     }
 
     function refreshDataInBackground() {
-        fetch(url).then(res => res.json()).then(data => {
+        fetch(`${url}?token=${encodeURIComponent(accessToken)}`).then(res => res.json()).then(data => {
             const changed = JSON.stringify(data) !== JSON.stringify(window.expenseData);
             window.expenseData = data;
             if (!changed) return; // nothing new — skip re-render so nothing re-animates
@@ -1720,6 +1788,8 @@
         let container = e.currentTarget.querySelector('.item-container');
         diff > 50 ? container.classList.add('swiped') : container.classList.remove('swiped');
     }
+
+    initAccess();
 </script>
 </body>
 </html>
